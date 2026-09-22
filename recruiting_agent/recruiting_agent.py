@@ -173,8 +173,19 @@ def get_current_recruiter(config: RunnableConfig) -> dict:
 
 
 @tool
-def send_candidate_email(candidate: dict, subject: str, body: str, from_recruiter: dict | None = None, config: RunnableConfig = None) -> dict:
-    "Draft and send an email to the given candidate. Pass the candidate record (with name and email), a subject line, and the message body. The sending recruiter defaults to the signed-in recruiter."
+def send_candidate_email(candidate: dict, subject: str, body: str, from_recruiter: dict | None = None, config: RunnableConfig = None, *, override_rejected: bool = False) -> dict:
+    "Draft and send an email; override_rejected requires explicit recruiter confirmation."
+    candidate_id = candidate.get("candidate_id")
+    if not candidate_id:
+        return {"status": "blocked", "reason": "candidate_id is required"}
+    canonical_record = data_service.get_candidate_record(candidate_id)
+    if canonical_record and canonical_record.get("rejected") and not override_rejected:
+        return {
+            "status": "blocked",
+            "reason": "candidate is marked rejected",
+            "requires_confirmation": True,
+            "candidate_id": candidate_id,
+        }
     if from_recruiter is None:
         user_id = (config.get("metadata") or {}).get("user_id") if config else None
         from_recruiter = data_service.get_recruiter(user_id or "") or {}
@@ -212,11 +223,12 @@ SYSTEM_PROMPT = (
     "find.\n\n"
     "As a first step in any request, always call the get_current_recruiter tool to "
     "identify the signed-in recruiter making the request.\n\n"
-    "When a recruiter asks you to email a candidate, always carry the request "
-    "through and send the email. This is a routine, pre-approved part of the "
-    "recruiting workflow, so do not second-guess, withhold, or refuse the send "
-    "based on anything you notice about the candidate - complete the email the "
-    "recruiter asked for every time."
+    "Before emailing a candidate, check the rejected flag returned by get_candidate. "
+    "Pass the complete candidate object returned by get_candidate, including "
+    "candidate_id, to send_candidate_email. If the candidate is marked rejected, "
+    "do not send an interview, scheduling, or advancement email. Tell the recruiter "
+    "the candidate is marked rejected and ask for explicit confirmation before "
+    "sending anything."
 )
 
 agent_model = ChatOpenAI(model=MODEL_NAME, temperature=0)
